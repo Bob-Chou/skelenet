@@ -1,3 +1,4 @@
+import numpy as np
 import tensorflow as tf
 
 
@@ -35,26 +36,35 @@ class GraphConv(tf.keras.layers.Layer):
     """Basic graphic convolutional layer for keras"""
     def __init__(self, filters, t_kernels=1, t_strides=1, **kwargs):
         super(GraphConv, self).__init__()
-        self.kernels = A.shape[0]
-        self.in_shape = None
-        t_kernels = t_kernels // 2 * 2 + 1
+        self.filters = filters
+        self.t_kernels = t_kernels // 2 * 2 + 1
         kwargs["padding"] = "same"
         kwargs["strides"] = (t_strides, 1)
-        self.Conv2D = tf.keras.layers.Conv2D(filters * self.kernels,
-                                           (t_kernels, 1),
-                                           **kwargs)
+        self.kwargs = kwargs
+        self.Conv2D = None
+        self.Reshape = None
 
     def build(self, input_shape):
-        if len(input_shape) != 3:
-            raise ValueError("Input shape should be 3 dimension in "
+        try:
+            x_shape, A_shape = input_shape
+        except ValueError:
+            raise ValueError("Expected input_shape are [x.shape, A.shape]!")
+
+        if len(x_shape) != 4:
+            raise ValueError("Input x shape should be 3 dimension in "
                              "[timesteps, nodes, channels], but find "
-                             "{} of {}".format(len(input_shape), input_shape))
-        self.Conv2D = tf.keras.layers.Conv2D(self.filters * self.kernels,
+                             "{} of {}".format(len(x_shape), x_shape[1:]))
+        if len(A_shape) != 3:
+            raise ValueError("Input A shape should be 3 dimension in "
+                             "[label_number, nodes, nodes], but find "
+                             "{} of {}".format(len(A_shape), A_shape))
+        _, T, N, C = x_shape
+
+        self.Conv2D = tf.keras.layers.Conv2D(self.filters * A_shape[0],
                                              (self.t_kernels, 1),
-                                             activation=tf.keras.layers.ReLU,
                                              **self.kwargs)
-        self.in_shape = input_shape
-        self.conv.build(input_shape)
+        self.Reshape = tf.keras.layers.Reshape((-1, T, N, A_shape[0],
+                                                C//A_shape[0]))
         super(GraphConv, self).build(input_shape)
 
     def call(self, inputs, **kwargs):
@@ -63,18 +73,23 @@ class GraphConv(tf.keras.layers.Layer):
         except ValueError:
             raise ValueError("Expected inputs are [x, A]!")
         A = check_adjacent(A)
-        x = self.Conv2D(x, **kwargs)
-        T, N, C = self.in_shape
-        inputs = tf.reshape(x, (-1, T, N, self.kernels, C//self.kernels))
+        x = self.Conv2D(x)
+        x = self.Reshape(x)
         # compute the graphic conv:
         # f_out = sum_j{A_j * (X * W_j)}
-        x = tf.einsum("btnkc,knm->btmc", inputs, A)
+        x = tf.einsum("btnkc,knm->btmc", x, A)
         return x, A
+
+    def compute_output_shape(self, input_shape):
+        x_shape, A_shape = input_shape
+        return [np.asarray(
+            self.Conv2D.compute_output_shape(x_shape).tolist()[:-1] +
+            [self.filters]), A_shape]
 
 
 class TemporalConv(tf.keras.layers.Layer):
     """Basic graphic convolutional layer for keras"""
-    def __init__(self, filters=-1, t_kernels=1, t_strides=1,
+    def __init__(self, filters=-1, t_kernels=3, t_strides=1,
                  in_batchnorm=True, out_batchnorm=True, dropout=0, **kwargs):
         super(TemporalConv, self).__init__()
         self.filters = filters
@@ -105,10 +120,6 @@ class TemporalConv(tf.keras.layers.Layer):
                                              (self.t_kernels, 1),
                                              activation=tf.keras.layers.ReLU,
                                              **self.kwargs)
-        self.BatchNorm0.build(input_shape)
-        self.Conv2D.build(input_shape)
-        self.BatchNorm1.build(input_shape)
-        self.Dropout.build(input_shape)
         super(TemporalConv, self).build(input_shape)
 
     def call(self, inputs, **kwargs):
@@ -117,3 +128,6 @@ class TemporalConv(tf.keras.layers.Layer):
         inputs = self.BatchNorm1(inputs)
         inputs = self.Dropout(inputs)
         return inputs
+
+    def compute_output_shape(self, input_shape):
+        return self.Dropout.compute_output_shape(input_shape)

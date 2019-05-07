@@ -6,8 +6,11 @@ from lib.graph import Graph
 
 skeleton = Graph("sbu", "spatial")
 
-input_features = Input([skeleton.num_node, skeleton.num_node, 3])
-input_A = Input([skeleton.A.shape])
-x, A = GraphConv(3, t_kernels=3)([input_features, input_A])
-x = TemporalConv(A, filters=-1, t_kernels=1, t_strides=1,
-                 in_batchnorm=True, out_batchnorm=True, dropout=0,)
+input_features = Input([30, skeleton.num_node, 3], dtype="float32")
+x = tf.keras.layers.Conv2D(64 * 3, (3, 1), padding="same")(input_features)
+input_A = Input(tensor=tf.keras.backend.constant(skeleton.A))
+x, A = GraphConv(64, t_kernels=3)([input_features, input_A])
+x = TemporalConv(64, dropout=0.5)(x)
+x, A = GraphConv(128, t_kernels=3)([x, A])
+x = TemporalConv(128, dropout=0.5)(x)
+print(x.shape)
